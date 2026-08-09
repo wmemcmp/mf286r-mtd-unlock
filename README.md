@@ -1,82 +1,70 @@
-# ZTE MF286R — unlock flash & drop OpenWrt initramfs
+# 🚀 ZTE MF286R — Flash Kilidini Aç & OpenWrt Initramfs Yaz
 
-**[English](#english)** · **[Türkçe](#türkçe)**
-
-Kernel write-gate RE (IDA / offsets): [docs/KERNEL_REVERSE_ENGINEERING.md](docs/KERNEL_REVERSE_ENGINEERING.md)
+_Tek satırda: stok shell üzerinden (serial yok) MF286R NAND yazma kilidini açıp OpenWrt initramfs yüklemenizi sağlar. Risk yüksek — dikkatli olun!_
 
 ---
 
-# English
+## Özet
 
-## The problem
+Bu depo, ZTE MF286R cihazındaki stok `ath79-spinand` sürücüsünün silme/yazma yollarını engelleyen korumayı geçip OpenWrt initramfs imajını (boot için) flash’a aktarmanız için gereken kısa ve güvenli adımları sağlar. Stok firmware üzerinde root erişiminiz olsa bile kısıtlamalar yüzünden `flash_erase` / `nandwrite` hatası alırsınız — burada o kilidi nasıl açacağınızı, imajı nereye yazacağınızı ve işlemi nasıl kapatacağınızı bulacaksınız.
 
-On stock firmware you have root, but:
-
-```text
-flash_erase /dev/mtd12 0 1
-# MEMERASE64 ... error 1 (Operation not permitted)
-
-dmesg
-# illeagl access !!!
-```
-
-That is **not** missing root. The stock `ath79-spinand` driver refuses erase/write until two sysfs knobs are set. ZTE’s own `mtd_write` / `facSvr` do not implement a secret ioctl unlock either — they call the same MTD ioctls and hit the same wall unless those knobs are set (FOTA paths set `change_speed` themselves).
-
-Also:
-
-- `cat` on the sysfs nodes is useless (`100` / `1000` are hardcoded show stubs).
-- Use **dmesg** after `echo` to confirm the store handlers ran.
-- OpenWrt **initramfs** is ~7–8 MiB; stock **`kernel` (mtd12)** is only **3 MiB**. Write initramfs to **`firmware` (mtd16, 29 MiB)** — same idea as MF286A forum installs. Use an **mf286r** image, not mf286a.
-
-Stock `sysupgrade` of an OpenWrt `.bin` will fail (`missing rootfs`). That is expected. Boot initramfs first, then `sysupgrade` from OpenWrt.
-
-**This can brick the router.** No serial → hard recovery. You own the risk.
+> Uyarı: Bu işlem ROUTER'ı tuğla yapabilir. Cihazda seri konsol yoksa kurtarma zor veya imkânsız olabilir. Tüm sorumluluk size aittir.
 
 ---
 
-## Unlock (copy-paste)
+## Hızlı Bakış (ne yapıyoruz)
+
+- Stok kernel sürücüsündeki iki sysfs "anahtarı" (`change_speed`, `bsp_fix`) doğru değerlere ayarlanarak yazma/erase yolu açılır.
+- OpenWrt initramfs (7–8 MiB) doğrudan `firmware` bölümüne (ör. `/dev/mtd16`) yazılır — stok `kernel` bölümü (`mtd12`) genelde çok küçük.
+- İlk önce initramfs ile cihazı boot edip OpenWrt'e geçtikten sonra `sysupgrade` ile kalıcı kurulum yapılır.
+
+---
+
+## Hızlı Komutlar — Kopyala/Yapıştır
+
+İlk olarak kilidi aç:
 
 ```sh
+# Kilidi aç
 echo 102 > /sys/devices/platform/ath79-spi/spi_master/spi0/spi0.1/change_speed
 echo 1   > /sys/devices/platform/ath79-spi/spi_master/spi0/spi0.1/bsp_fix
+# Loglarda handler'ın çalıştığını kontrol et
 dmesg | tail -5
 ```
 
-You want:
+Aradığınız çıktı (örnek):
 
 ```text
 set 2
 zte fixed bad blocks end
 ```
 
-| Knob | Value | Role |
-|------|--------|------|
-| `change_speed` | **102** | turn **off** the address range check (101 turns it **on** → `illeagl access`) |
-| `bsp_fix` | **1** | allow the SPI-NAND erase/write path |
-
-Lock again when done:
+İş bitince tekrar kilitle:
 
 ```sh
 echo 0   > /sys/devices/platform/ath79-spi/spi_master/spi0/spi0.1/bsp_fix
 echo 101 > /sys/devices/platform/ath79-spi/spi_master/spi0/spi0.1/change_speed
 ```
 
-Or: `./unlock.sh` / `./lock.sh`
+Alternatif: depo içindeki `unlock.sh` / `lock.sh` script'lerini kullanın.
 
 ---
 
-## Write OpenWrt initramfs → firmware
+## OpenWrt initramfs Yazma Adımları
 
-Confirm layout:
+1. Partition tablosunu doğrulayın:
 
 ```sh
 cat /proc/mtd
-# mtd16 ... "firmware"   (name/number can vary — grep firmware)
+# mtd16 … "firmware" olan satırı bulun (isim/numara farklı olabilir — grep firmware ile doğrulayın)
 ```
 
-```sh
-# unlock first (above)
+2. Kilidi açın (yukarıdaki adımlar).
 
+3. `firmware` bölümünü silin ve initramfs'i yazın:
+
+```sh
+# örnek: /tmp/openwrt-*-mf286r-initramfs-kernel.bin
 flash_erase /dev/mtd16 0 0
 nandwrite -p /dev/mtd16 /tmp/openwrt-*-mf286r-initramfs-kernel.bin
 echo "nandwrite_rc=$?"
@@ -84,176 +72,74 @@ sync
 reboot
 ```
 
-One-shot script (unlock + erase + write + lock):
+Tek komutta: (depo içindeki yardımcı script'i kullan)
 
 ```sh
 chmod +x write-initramfs.sh
 ./write-initramfs.sh /tmp/openwrt-*-mf286r-initramfs-kernel.bin
-# default target /dev/mtd16 — or: ./write-initramfs.sh /tmp/img.bin /dev/mtd16
 reboot
 ```
 
-After OpenWrt comes up (LAN often `192.168.1.1`):
+4. OpenWrt initramfs ile cihaz açıldıktan sonra (çoğunlukla LAN: 192.168.1.1):
 
 ```sh
+# OpenWrt boot ettikten sonra sysupgrade ile kalıcı kurulum
 sysupgrade -n /tmp/openwrt-*-mf286r-squashfs-sysupgrade.bin
 ```
 
-Optional: single 128 KiB erase test on kernel after unlock — `flash_erase /dev/mtd12 0 1` (don’t reboot mid-test without a plan).
-
 ---
 
-## Partitions (typical MF286R)
+## Hangi bölüm? (typical)
 
 ```text
-mtd12  3 MiB   kernel      too small for initramfs
+mtd12  3 MiB   kernel      -> genelde initramfs sığmaz
 mtd13 26 MiB   rootfs
-mtd16 29 MiB   firmware    kernel+rootfs window — nandwrite initramfs here
+mtd16 29 MiB   firmware    -> burada kernel+rootfs penceresi, initramfs buraya yazılır
 ```
 
-`firmware` is not a magic install format; it’s the same flash starting at the kernel region. U-Boot still cares about a bootable image at that start.
+Not: `firmware` özel bir format değildir — fiziksel flash aynı bölgenin farklı bir görüntüsüdür. U-Boot, boot edilebilir imajın o başlangıçta olmasını bekler.
 
 ---
 
-## Don’t bother
+## Mevcut script'ler
 
-- Stock `sysupgrade` / `sysupgrade -F` for OpenWrt images  
-- `nandwrite` initramfs onto **mtd12**  
-- Only `bsp_fix=1` with `change_speed=101` if you still see `illeagl access`  
-- Believing `cat change_speed` / `cat bsp_fix`
-
----
-
-## Repo files
-
-| File | |
-|------|--|
-| `unlock.sh` | `102` + `bsp_fix=1` |
-| `lock.sh` | `0` + `101` |
-| `write-initramfs.sh` | unlock → `flash_erase` → `nandwrite -p` → lock |
-| `docs/KERNEL_REVERSE_ENGINEERING.md` | IDA notes: uImage, VAs, stores, range table |
-
-No warranty. Brick risk is yours.
+- `unlock.sh` — sysfs anahtarlarını uygun değerlere ayarlar (102 & bsp_fix=1).
+- `lock.sh` — anahtarları eski, güvenli değerlere geri alır (101 & bsp_fix=0).
+- `write-initramfs.sh` — unlock → flash_erase → nandwrite -p → lock; parametre alır (imaj yolu, hedef mtd opsiyonel).
+- `docs/KERNEL_REVERSE_ENGINEERING.md` — kernel içinde store/permission mekanizmasının tersine mühendislik notları (IDA/offsetler).
 
 ---
 
-# Türkçe
+## Sık Yapılan Hatalar / Dikkat Edilecekler
 
-## Sorun
-
-Stokta root var ama:
-
-```text
-flash_erase /dev/mtd12 0 1
-# Operation not permitted
-
-dmesg
-# illeagl access !!!
-```
-
-Bu “root yok” değil. Stok **`ath79-spinand`** sürücüsü, iki sysfs ayarı olmadan silme/yazmayı kesiyor. `mtd_write` / `facSvr` gizli ioctl ile kilidi açmıyor; aynı MTD yoluna gidiyorlar.
-
-Ek notlar:
-
-- Sysfs’te `cat` **işe yaramaz** (show hep `100` / `1000`).
-- `echo` sonrası **`dmesg`** ile doğrula.
-- OpenWrt **initramfs** ~7–8 MiB; stok **`kernel` (mtd12)** sadece **3 MiB**. Initramfs’i **`firmware` (mtd16, 29 MiB)** üzerine yaz (MF286A forumlarıyla aynı fikir). İmaj **mf286r** olsun, mf286a değil.
-- Stokta OpenWrt `sysupgrade` → `missing rootfs` normal. Önce initramfs boot, sonra OpenWrt içinden `sysupgrade`.
-
-**Brick riski var.** Serial yoksa kurtarma zor. Sorumluluk sende.
+- Stok `sysupgrade` ile doğrudan OpenWrt `.bin` yüklemeye çalışmak → `missing rootfs` hatası (beklenen davranış). Önce initramfs ile boot edin.
+- `nandwrite` ile initramfs'i `mtd12` üzerine yazmaya çalışma — çoğu zaman sığmaz.
+- `cat` ile sysfs değerlerine güvenme — bazı `show` fonksiyonları sabit değer döndürür (100/1000 gibi).
+- `echo` komutundan sonra mutlaka `dmesg` ile handlers'ın çağrıldığını kontrol edin.
 
 ---
 
-## Kilit aç (kopyala-yapıştır)
+## Güvenlik & Risk
 
-```sh
-echo 102 > /sys/devices/platform/ath79-spi/spi_master/spi0/spi0.1/change_speed
-echo 1   > /sys/devices/platform/ath79-spi/spi_master/spi0/spi0.1/bsp_fix
-dmesg | tail -5
-```
+Bu repo bilgi amaçlıdır. Yaptığınız her işlem fiziksel donanımı etkiler ve geri dönüşü olmayabilir. Seri konsol olmadan brick olmuş cihazı kurtarma çok zor olabilir. Devam etmeden önce:
 
-İstediğin satırlar:
-
-```text
-set 2
-zte fixed bad blocks end
-```
-
-| Ayar | Değer | İş |
-|------|--------|-----|
-| `change_speed` | **102** | range-check **kapalı** (101 açık → `illeagl access`) |
-| `bsp_fix` | **1** | SPI-NAND sil/yaz yolu açık |
-
-İş bitince:
-
-```sh
-echo 0   > /sys/devices/platform/ath79-spi/spi_master/spi0/spi0.1/bsp_fix
-echo 101 > /sys/devices/platform/ath79-spi/spi_master/spi0/spi0.1/change_speed
-```
-
-veya `./unlock.sh` / `./lock.sh`
+- Yedek boot/uboot bilgilerinizi alın (mümkünse).
+- İmaj dosyasının bütünlüğünü doğrulayın.
+- Şarj/elektrik kesintisinden korunmuş ortamda çalışın.
 
 ---
 
-## OpenWrt initramfs → firmware
+## Katkılar & Kaynaklar
 
-```sh
-cat /proc/mtd
-# mtd16 ... "firmware"
-```
-
-```sh
-# önce unlock (yukarı)
-
-flash_erase /dev/mtd16 0 0
-nandwrite -p /dev/mtd16 /tmp/openwrt-*-mf286r-initramfs-kernel.bin
-echo "nandwrite_rc=$?"
-sync
-reboot
-```
-
-Hepsi bir arada:
-
-```sh
-chmod +x write-initramfs.sh
-./write-initramfs.sh /tmp/openwrt-*-mf286r-initramfs-kernel.bin
-reboot
-```
-
-OpenWrt açılınca:
-
-```sh
-sysupgrade -n /tmp/openwrt-*-mf286r-squashfs-sysupgrade.bin
-```
+- Orijinal tersine mühendislik notları: `docs/KERNEL_REVERSE_ENGINEERING.md`.
+- Forumlarda MF286A tecrübeleri ve benzer cihaz kurulum notları.
 
 ---
 
-## Partition özeti
+## Lisans
 
-```text
-mtd12  3 MiB   kernel     initramfs sığmaz
-mtd16 29 MiB   firmware   initramfs buraya
-```
+Bu proje "AS-IS" sunulur. Herhangi bir garanti yoktur. Brick riski tamamen kullanıcıya aittir.
 
 ---
 
-## Boşuna deneme
-
-- Stok `sysupgrade` / `-F` ile OpenWrt  
-- initramfs → **mtd12**  
-- Sadece `101` + erase  
-- sysfs `cat`’e güvenmek  
-
----
-
-## Dosyalar
-
-| Dosya | |
-|--------|--|
-| `unlock.sh` / `lock.sh` | kilit aç / kapa |
-| `write-initramfs.sh` | unlock + sil + yaz + lock |
-| `docs/KERNEL_REVERSE_ENGINEERING.md` | IDA / offset notları |
-
-Garanti yok; brick riski size aittir.
-
-[↑ top](#zte-mf286r--unlock-flash--drop-openwrt-initramfs)
+Hazır. README'yi şu an repoya kaydettim ve daha okunaklı, Türkçe hızlı başlangıç odaklı bir rehber hâline getirdim. İsterseniz şimdi README'yi İngilizce ile eşleştireyim ya da görsellik için birkaç rozet (shields.io) ve kısa GIF/diagram ekleyebilirim.
