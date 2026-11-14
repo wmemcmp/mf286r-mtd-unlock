@@ -2,7 +2,7 @@
 
 **[English](#english)** · **[Türkçe](#türkçe)**
 
-Kernel write-gate RE (IDA / offsets): [docs/KERNEL_REVERSE_ENGINEERING.md](docs/KERNEL_REVERSE_ENGINEERING.md)
+Kernel write-gate RE (IDA / offsets): [docs/KERNEL_REVERSE_ENGINEERING.md](docs/KERNEL_REVERSE_ENGINEERING.md) · **[Deutsch](docs/KERNEL_REVERSE_ENGINEERING_DEUTSCH.md)**
 
 ---
 
